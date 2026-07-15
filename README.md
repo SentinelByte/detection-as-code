@@ -1,135 +1,105 @@
-# Detection as Code (ELK Stack)
+# detection-as-code
 
-Welcome to the **Detection as Code Pipeline** repository! This project aims to streamline and enhance threat detection through a robust, scalable pipeline built on the principles of "detection as code." This repository provides a comprehensive solution for creating, testing, and deploying detection rules in a systematic and automated manner. ***This Repo focus with ELK stack !!!***.
+[![CI](https://github.com/SentinelByte/detection-as-code/actions/workflows/ci.yml/badge.svg)](https://github.com/SentinelByte/detection-as-code/actions/workflows/ci.yml)
 
+A small, schema-first pipeline for authoring detection rules as code: write
+one YAML rule, run deterministic checks on it, export it to Kibana or Sigma,
+and optionally get an advisory LLM review before a human ships it.
 
-## 📋 Overview
+This isn't a SIEM or a rule-management platform - it's the layer that sits
+between "an analyst has an idea for a detection" and "a well-formed,
+documented, ATT&CK-mapped rule exists in version control."
 
-***This Repo focus with ELK stack !!!***.
-The Detection as Code Pipeline is designed to bridge the gap between detection engineering and development practices. It enables security teams to define, test, and manage detection rules as code, ensuring that these rules are both effective and maintainable. This approach brings the benefits of version control, automated testing, and continuous integration to the realm of security detection.
+## Why this exists
 
+Most detection-as-code write-ups stop at "put your rules in git." The parts
+that actually matter for rule *quality* - is this query too broad, does it
+have documented false positives, is it mapped to ATT&CK, would an analyst
+have enough context to triage an alert at 3am - are usually left to review
+comments. This repo makes those checks executable, and adds one narrow,
+explicitly-bounded LLM check on top for the judgment calls a linter can't
+make. See [docs/architecture.md](docs/architecture.md) for the full flow and
+[docs/threat_model.md](docs/threat_model.md) for how the AI reviewer is kept
+advisory-only in the code, not just in the docs.
 
-## 🚀 Features
+## Quickstart
 
-- **Detection as Code**: Define and manage your detection rules in code, making them easily versioned and reviewed.
-- **Automated Testing**: Run automated tests on your detection rules to ensure their accuracy and effectiveness before deployment.
-- **Continuous Integration**: Integrate with CI/CD pipelines to automate the deployment and updating of detection rules.
-- **Scalability**: Designed to scale with your organization's needs, handling complex rule sets and large datasets efficiently.
-- **Documentation and Examples**: Comprehensive documentation and example configurations to get you started quickly.
+```bash
+git clone https://github.com/SentinelByte/detection-as-code.git
+cd detection-as-code
+pip install -e ".[dev]"
 
+# Deterministic checks - this is what a CI merge gate should run
+detection-as-code lint examples/rules/windows_suspicious_scheduled_task.yaml
 
-## 🛠️ Getting Started
+# Export to a Kibana detection rule or a Sigma rule
+detection-as-code export examples/rules/windows_suspicious_scheduled_task.yaml --format kibana
+detection-as-code export examples/rules/windows_suspicious_scheduled_task.yaml --format sigma
 
-### Prerequisites
+# Advisory-only LLM review (requires `pip install -e ".[ai]"` and ANTHROPIC_API_KEY)
+detection-as-code review examples/rules/windows_suspicious_scheduled_task.yaml
 
-Before you start, ensure you have the following installed:
-- [Python](https://www.python.org/) (version 3.8 or higher)
-- [Docker](https://www.docker.com/) (for containerized environments)
-- [Requests](https://pypi.org/project/requests/)
-- [Elastic_Cloud](https://www.elastic.co/guide/en/security/current/security-apis.html)
-- [elasticsearch - Elasticsearch]
-- [elastic_transport - RequestsHttpNode]
+# Validate against Elasticsearch and create the rule in Kibana
+# (requires DAC_ELASTIC_URL, DAC_ELASTIC_API_KEY, DAC_KIBANA_URL,
+#  DAC_KIBANA_USER, DAC_KIBANA_PASSWORD in the environment)
+detection-as-code deploy examples/rules/windows_suspicious_scheduled_task.yaml
+```
 
+## Authoring a rule
 
-### Installation and Usage
+```yaml
+name: windows_suspicious_scheduled_task_creation
+platform: windows
+description: >
+  Detects creation of a scheduled task via schtasks.exe with cmd.exe as the
+  parent process - a common persistence/privilege-escalation technique.
+severity: high
+risk_score: 62
+index_patterns:
+  - "winlogbeat-*"
+query: 'process.name:"schtasks.exe" and process.parent.name:"cmd.exe"'
+tactics:
+  - persistence
+  - privilege_escalation
+techniques:
+  - T1053.005
+false_positives:
+  - Legitimate software installers registering scheduled maintenance tasks
+```
 
-1. ***Clone the Repository***
+## What's checked, and by what
 
-   ```
-   git clone https://github.com/SentinelByte/Detection_as_Code.git
-   cd detection-as-code
-   ```
+| Check | Where | Blocking? |
+|---|---|---|
+| Schema validity, risk score range, known severity/tactic values | `models.py` | Yes (raises on load) |
+| Unsafe rule name, empty/wildcard query, missing index patterns | `validators.py` | Yes |
+| Missing ATT&CK mapping, no false positives documented, thin description | `validators.py` | Warning only |
+| Coverage gaps, false-positive risk, missing triage context | `ai_review.py` (LLM) | Never - advisory only |
+| Query actually parses against real Elasticsearch indices | `elastic_client.py` | Yes, at deploy time |
 
-2. ***Store the create_json.py for custom runs***
+## Non-goals / known limits
 
-   Create a dedicated VM (Virtual Machine) on your prefered cloud provider (GCP/AWS/Azure/etc.) and store the create_json.py code.
-   
-   Altrernatively, you can use a local machine (Note! just make sure you have a proper allowed connection to the ELK SaaS and API Endpoints).
+- **Sigma export is intentionally partial.** It only converts simple
+  `field:value AND field:value` Kuery. Anything with `OR` or grouping
+  raises `UnsupportedQueryError` rather than risk a silently wrong
+  translation - see [docs/architecture.md](docs/architecture.md).
+- **This is not a secrets manager.** `EnvSecretProvider` is the only
+  provider shipped; production use should implement `SecretProvider`
+  against your actual vault.
+- **The AI reviewer doesn't replace a human reviewer** - it's scoped to
+  produce findings, not decisions.
 
-   Upon detection rule creation, you will trigger manually this code and it will take you through the process of a JSON file creation, that will be used later for the detection rule creation.
+## Development
 
-3. ***Set up a push job to your CICD tool***
+```bash
+pip install -e ".[dev]"
+ruff check src tests
+mypy src
+pytest --cov=detection_as_code
+bandit -r src
+pip-audit
+```
 
-   To run the code and create the detection rule, push ths json file to your CICD tool (Jenkins/ GitLab CI/CD/ Circle CI/ etc).
-   
-   The job should fetch a JSON file created from the crate_json.py code.
-   
-   3.1. Set up a cron job/ bash/ or other method to push the json file created from step 2 to your Github account.
+## License
 
-   If you don't want to use a github account, fill free to use any other solution for that.
-
-   You can even choose to push the json file directly to a cicd tool you choose (Jenkins/ GitLab CI/CD/ Circle CI/ etc.)
-
-   3.2. setup permissions - chmod +x ~/push_and_archive.sh
-
-   3.3 Open crontab and create the cron job:
-   
-   ```
-   crontab -e
-   0 * * * * /bin/bash ~/push_to_github.sh
-   ```
-   
-   ** Note! You can adjust the cron job interval to your needs.
-   
-5. ***Set Up CI Environment***
-   
-   Use Github Actions/ Juenkins/ etc.
-   If needed, create a virtual environment and install dependencies:
-
-   ```
-   python -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
-
-7. ***Configure the Pipeline***
-
-   Update the configuration files located in the `config` directory.
-   you will need to run the following:
-   - create_rule.py
-   - check_query_main.py
-  
-     ** Make sure you upload the following also:
-      - validate_qury.py
-      - check_query.py
-
-9. ***Run the Pipeline***
-
-   Start the pipeline using Docker:
-
-   ```
-   docker-compose up
-   ```
-
-   Or run locally:
-
-   ```
-   python3 craft_json.py
-   python3 create_rule.py
-   python3 check_query_main.py
-   ```
-
-
-## 🧪 Testing
-
-You can run this code locally and see if everything works.
-Make sure you have connection between your local machine to the Elastic endpint.
-To ensure your detection rules are functioning as expected, run the following one by one:
-1. craft_json.py
-2. create_rile.py
-3. check_query_main.py
-
-
-
-## 📝 Documentation
-
-For more detailed information on how to use and customize the Detection as Code refere to the comments within the code.
-
-
-## 🤝 Acknowledgements
-
-Provide ideas & inspiration for this project: https://medium.com/threatpunter/from-soup-to-nuts-building-a-detection-as-code-pipeline-28945015fc38
-
-© SentinelByte | dancohvax
-
-Happy detecting! 🚀🔍
+GPLv3 - see [LICENSE](LICENSE).
