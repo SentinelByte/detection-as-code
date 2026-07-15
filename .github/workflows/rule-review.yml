@@ -1,0 +1,38 @@
+name: AI Rule Review (advisory)
+
+# This workflow never gates merges - see ci.yml for the deterministic checks
+# that do. It only posts an advisory review for a human to read, and it
+# no-ops entirely when ANTHROPIC_API_KEY isn't configured so forks and
+# reviewers without the secret still get a clean, green pipeline.
+on:
+  pull_request:
+    paths:
+      - "examples/rules/**"
+  workflow_dispatch:
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package with AI extra
+        run: pip install -e ".[ai]"
+      - name: Review changed rules
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          base_ref="${{ github.event.pull_request.base.sha || 'HEAD~1' }}"
+          for f in $(git diff --name-only "$base_ref" HEAD -- examples/rules); do
+            echo "::group::Advisory review: $f"
+            python -m detection_as_code.cli review "$f" || true
+            echo "::endgroup::"
+          done
+      - name: Skip notice
+        if: ${{ env.ANTHROPIC_API_KEY == '' }}
+        run: echo "ANTHROPIC_API_KEY not configured - skipping advisory AI review."
