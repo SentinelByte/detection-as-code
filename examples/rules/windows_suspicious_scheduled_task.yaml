@@ -1,0 +1,24 @@
+# Example rule definition. This is the unit of work in this repo: author one
+# of these, then run `detection-as-code lint|export|review|deploy` against it.
+name: windows_suspicious_scheduled_task_creation
+platform: windows
+description: >
+  Detects creation of a scheduled task via schtasks.exe with cmd.exe as the
+  parent process - a common persistence and privilege-escalation technique
+  used to survive reboots or execute with a different user's context.
+severity: high
+risk_score: 62
+index_patterns:
+  - "winlogbeat-*"
+query: 'process.name:"schtasks.exe" and process.parent.name:"cmd.exe"'
+tactics:
+  - persistence
+  - privilege_escalation
+techniques:
+  - T1053.005
+false_positives:
+  - Legitimate software installers registering scheduled maintenance tasks
+  - IT administration scripts run from approved deployment tooling
+author: detection-engineering
+tags:
+  - maturity:staging
