@@ -53,8 +53,8 @@ def cmd_deploy(args: argparse.Namespace) -> int:
         return 1
 
     kibana = KibanaClient.from_secrets(secrets)
-    result = kibana.create_rule(json.loads(to_kibana_json(rule)))
-    print(f"Deployed rule: {result.get('id', rule.name)}")
+    kibana.create_rule(json.loads(to_kibana_json(rule)))
+    print("Deployed rule successfully")
     return 0
 
 
